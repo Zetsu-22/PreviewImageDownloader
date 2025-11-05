@@ -85,3 +85,4 @@ bin\Debug\net9.0-windows\PreviewImageDownloader.exe
 Можно создать ярлык на рабочем столе для быстрого доступа.
 
 
+
