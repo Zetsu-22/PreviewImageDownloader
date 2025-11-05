@@ -160,7 +160,7 @@ public partial class Form1 : Form
         pnlGallery = new Panel
         {
             Location = new Point(20, 265),
-            Size = new Size(840, 350),
+            Size = new Size(840, 380),
             AutoScroll = true,
             BorderStyle = BorderStyle.FixedSingle,
             Visible = false
@@ -168,10 +168,12 @@ public partial class Form1 : Form
 
         flpGallery = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            AutoScroll = true,
+            Location = new Point(0, 0),
+            AutoSize = true,
+            AutoScroll = false,
             FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = true
+            WrapContents = true,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
         };
         pnlGallery.Controls.Add(flpGallery);
 
@@ -257,7 +259,7 @@ public partial class Form1 : Form
         // Обновляем подсказки в зависимости от типа контента
         string placeholder = cmbContentType.SelectedIndex switch
         {
-            0 => "Введите название аниме (например: noragami)",
+            0 => "Введите название аниме на русском или английском (например: моя геройская академия или my hero academia)",
             1 => "Введите название фильма (например: Fight Club)",
             2 => "Введите название сериала (например: Breaking Bad)",
             3 => "Введите название книги (например: The Witcher)",
@@ -279,7 +281,7 @@ public partial class Form1 : Form
         
         string template = contentType switch
         {
-            ContentType.Anime => "https://kitsu.io/api/edge/anime?filter[text]={название}",
+            ContentType.Anime => "https://kitsu.io/api/edge/anime?filter[text]={название_на_любом_языке}",
             ContentType.Movie => string.IsNullOrEmpty(apiKey) 
                 ? "http://www.omdbapi.com/?apikey={ваш_ключ}&t={название_фильма}&type=movie"
                 : $"http://www.omdbapi.com/?apikey={apiKey}&t={{название_фильма}}&type=movie",
@@ -344,6 +346,7 @@ public partial class Form1 : Form
                 }
 
                 lblStatus.Text = "Загрузка данных из API...";
+                lastSearchQuery = null; // Сбрасываем для API URL
                 jsonResponse = await DownloadJsonAsync(apiUrl);
             }
             else
@@ -356,12 +359,13 @@ public partial class Form1 : Form
             }
 
             lblStatus.Text = "Загрузка данных из API...";
+                lastSearchQuery = searchName; // Сохраняем запрос для ранжирования
                 jsonResponse = await GetSearchJsonResponseAsync(searchName, contentType);
             }
 
             // Показываем галерею с результатами
             ShowGalleryAsync(jsonResponse, contentType);
-            lblStatus.Text = "Выберите превью из результатов";
+            lblStatus.Text = "Результаты отсортированы по релевантности. Выберите превью из списка.";
         }
         catch (Exception ex)
         {
@@ -377,14 +381,173 @@ public partial class Form1 : Form
 
     private async Task<string> GetSearchJsonResponseAsync(string searchName, ContentType contentType)
     {
+        if (contentType == ContentType.Anime)
+        {
+            // Комбинированный поиск: пробуем оба API и объединяем результаты
+            List<JToken> allResults = new List<JToken>();
+            
+            // 1. Сначала через Kitsu API
+            try
+            {
+                string kitsuUrl = $"https://kitsu.io/api/edge/anime?filter[text]={Uri.EscapeDataString(searchName)}&page[limit]=20";
+                string kitsuResponse = await GetJsonFromUrlAsync(kitsuUrl);
+                JObject kitsuJson = JObject.Parse(kitsuResponse);
+                JArray? kitsuData = kitsuJson["data"] as JArray;
+                
+                if (kitsuData != null && kitsuData.Count > 0)
+                {
+                    foreach (JToken item in kitsuData)
+                    {
+                        allResults.Add(item);
+                    }
+                }
+            }
+            catch
+            {
+                // Игнорируем ошибки Kitsu
+            }
+            
+            // 2. Если Kitsu не дал результатов или дал мало, пробуем Jikan только с английским вариантом
+            if (allResults.Count < 5)
+            {
+                try
+                {
+                    // Определяем английский вариант для популярных запросов
+                    string englishVariant = searchName;
+                    if (searchName.ToLower().Contains("моя геройская") || searchName.ToLower().Contains("геройская академия") || searchName.ToLower().Contains("герой"))
+                    {
+                        englishVariant = "my hero academia";
+                    }
+                    else if (searchName.ToLower().Contains("атака титанов") || searchName.ToLower().Contains("титаны") || searchName.ToLower().Contains("титан"))
+                    {
+                        englishVariant = "attack on titan";
+                    }
+                    
+                    // Пробуем только один запрос к Jikan с английским вариантом, если он отличается от оригинала
+                    if (englishVariant != searchName)
+                    {
+                        string jikanUrl = $"https://api.jikan.moe/v4/anime?q={Uri.EscapeDataString(englishVariant)}&limit=20";
+                        string jikanResponse = await GetJsonFromUrlAsync(jikanUrl);
+                        string convertedJikan = ConvertJikanToKitsuFormat(jikanResponse);
+                        JObject jikanJson = JObject.Parse(convertedJikan);
+                        JArray? jikanData = jikanJson["data"] as JArray;
+                        
+                        if (jikanData != null && jikanData.Count > 0)
+                        {
+                            // Добавляем только те результаты, которых нет в Kitsu
+                            foreach (JToken jikanItem in jikanData)
+                            {
+                                string? jikanTitle = jikanItem["attributes"]?["canonicalTitle"]?.ToString();
+                                bool exists = false;
+                                
+                                foreach (JToken kitsuItem in allResults)
+                                {
+                                    string? kitsuTitle = kitsuItem["attributes"]?["canonicalTitle"]?.ToString();
+                                    if (kitsuTitle != null && jikanTitle != null && 
+                                        kitsuTitle.Equals(jikanTitle, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        exists = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (!exists)
+                                {
+                                    allResults.Add(jikanItem);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Игнорируем ошибки Jikan
+                }
+            }
+            
+            // 3. Если есть результаты, возвращаем их
+            if (allResults.Count > 0)
+            {
+                JObject result = new JObject
+                {
+                    ["data"] = new JArray(allResults.ToArray())
+                };
+                return result.ToString();
+            }
+            
+            // 4. Если результатов нет, пробуем еще раз только через Jikan
+            try
+            {
+                string jikanUrl = $"https://api.jikan.moe/v4/anime?q={Uri.EscapeDataString(searchName)}&limit=20";
+                string jikanResponse = await GetJsonFromUrlAsync(jikanUrl);
+                return ConvertJikanToKitsuFormat(jikanResponse);
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Не удалось найти аниме. Попробуйте:\n1. Использовать английское название\n2. Использовать API URL напрямую\n3. Проверить правильность написания\n\nОшибка: {ex.Message}");
+            }
+        }
+        
         return contentType switch
         {
-            ContentType.Anime => await GetJsonFromUrlAsync($"https://kitsu.io/api/edge/anime?filter[text]={Uri.EscapeDataString(searchName.ToLower())}"),
             ContentType.Movie => await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=movie"),
             ContentType.Series => await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=series"),
             ContentType.Book => await GetJsonFromUrlAsync($"https://openlibrary.org/search.json?title={Uri.EscapeDataString(searchName)}"),
             _ => throw new Exception("Неизвестный тип контента")
         };
+    }
+
+    private string ConvertJikanToKitsuFormat(string jikanJson)
+    {
+        try
+        {
+            JObject jikanObj = JObject.Parse(jikanJson);
+            JArray? jikanData = jikanObj["data"] as JArray;
+            
+            if (jikanData == null || jikanData.Count == 0)
+            {
+                return "{\"data\":[]}";
+            }
+
+            JArray kitsuData = new JArray();
+            
+            foreach (JToken item in jikanData)
+            {
+                JObject kitsuItem = new JObject
+                {
+                    ["id"] = item["mal_id"]?.ToString() ?? "",
+                    ["type"] = "anime",
+                    ["attributes"] = new JObject
+                    {
+                        ["canonicalTitle"] = item["title"]?.ToString() ?? item["title_english"]?.ToString() ?? "",
+                        ["titles"] = new JObject
+                        {
+                            ["en"] = item["title_english"]?.ToString() ?? item["title"]?.ToString(),
+                            ["en_jp"] = item["title"]?.ToString(),
+                            ["ja_jp"] = item["title_japanese"]?.ToString()
+                        },
+                        ["posterImage"] = new JObject
+                        {
+                            ["original"] = item["images"]?["jpg"]?["image_url"]?.ToString() 
+                                ?? item["images"]?["webp"]?["image_url"]?.ToString() 
+                                ?? ""
+                        }
+                    }
+                };
+                kitsuData.Add(kitsuItem);
+            }
+
+            JObject result = new JObject
+            {
+                ["data"] = kitsuData
+            };
+
+            return result.ToString();
+        }
+        catch
+        {
+            return "{\"data\":[]}";
+        }
     }
 
     private async Task<string> GetJsonFromUrlAsync(string url)
@@ -398,6 +561,8 @@ public partial class Form1 : Form
         }
     }
 
+    private string? lastSearchQuery = null;
+
     private void ShowGalleryAsync(string jsonResponse, ContentType contentType)
     {
         // Очищаем галерею
@@ -405,7 +570,22 @@ public partial class Form1 : Form
         selectedPreviewUrl = null;
         selectedItemName = null;
 
-        List<(string previewUrl, string itemName)> items = ExtractAllPreviews(jsonResponse, contentType);
+        // Используем улучшенную версию с ранжированием, если есть поисковый запрос
+        List<(string previewUrl, string itemName, string displayName, string officialName, int relevanceScore)> itemsWithScore;
+        
+        if (!string.IsNullOrEmpty(lastSearchQuery))
+        {
+            itemsWithScore = ExtractAllPreviewsWithScore(jsonResponse, contentType, lastSearchQuery);
+        }
+        else
+        {
+            // Если нет поискового запроса, используем старый метод
+            var itemsWithoutScore = ExtractAllPreviews(jsonResponse, contentType);
+            itemsWithScore = itemsWithoutScore.Select(i => (i.Item1, i.Item2, i.Item3, i.Item4, 0)).ToList();
+        }
+        
+        // Преобразуем в формат для отображения
+        var items = itemsWithScore.Select(i => (i.Item1, i.Item2, i.Item3, i.Item4)).ToList();
 
         if (items.Count == 0)
         {
@@ -415,41 +595,84 @@ public partial class Form1 : Form
 
         // Показываем галерею
         Label? lblGallery = this.Controls.OfType<Label>().FirstOrDefault(l => l.Text.Contains("Результаты поиска"));
-        if (lblGallery != null) lblGallery.Visible = true;
+        if (lblGallery != null)
+        {
+            lblGallery.Visible = true;
+            lblGallery.Text = $"Результаты поиска (выберите превью): Найдено {items.Count}";
+        }
         pnlGallery.Visible = true;
         btnDownloadSelected.Visible = true;
 
         // Загружаем превью для каждого элемента
-        foreach (var (previewUrl, itemName) in items)
+        int itemIndex = 0;
+        foreach (var (previewUrl, itemName, displayName, officialName) in items)
         {
             if (string.IsNullOrEmpty(previewUrl)) continue;
+            itemIndex++;
 
-            // Создаем контейнер для превью
+            // Создаем контейнер для превью (увеличиваем высоту для отображения дополнительной информации)
             Panel itemPanel = new Panel
             {
-                Size = new Size(150, 200),
+                Size = new Size(180, 240),
                 BorderStyle = BorderStyle.FixedSingle,
                 Margin = new Padding(5),
                 Cursor = Cursors.Hand
             };
 
-            // PictureBox для превью
+            // PictureBox для превью (загружаем изображение только при выборе)
             PictureBox picBox = new PictureBox
             {
-                Size = new Size(148, 148),
+                Size = new Size(178, 130),
                 Location = new Point(1, 1),
                 SizeMode = PictureBoxSizeMode.Zoom,
-                BorderStyle = BorderStyle.None
+                BorderStyle = BorderStyle.None,
+                BackColor = Color.LightGray
+            };
+            
+            // Показываем плейсхолдер вместо загрузки изображения
+            Label placeholderLabel = new Label
+            {
+                Text = "Нажмите для\nзагрузки\nпревью",
+                Location = new Point(1, 1),
+                Size = new Size(178, 130),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Arial", 8),
+                ForeColor = Color.Gray,
+                BackColor = Color.LightGray
+            };
+            picBox.Controls.Add(placeholderLabel);
+
+            // Метка с отображаемым названием (может быть русским)
+            Label displayLabel = new Label
+            {
+                Text = displayName.Length > 25 ? displayName.Substring(0, 22) + "..." : displayName,
+                Location = new Point(1, 132),
+                Size = new Size(178, 35),
+                TextAlign = ContentAlignment.TopCenter,
+                Font = new Font("Arial", 8, FontStyle.Bold),
+                ForeColor = Color.Black
             };
 
-            // Метка с названием
-            Label nameLabel = new Label
+            // Метка с официальным названием (английское/японское)
+            Label officialLabel = new Label
             {
-                Text = itemName.Length > 20 ? itemName.Substring(0, 17) + "..." : itemName,
-                Location = new Point(1, 150),
-                Size = new Size(148, 49),
+                Text = "Офф: " + (officialName.Length > 22 ? officialName.Substring(0, 19) + "..." : officialName),
+                Location = new Point(1, 167),
+                Size = new Size(178, 35),
                 TextAlign = ContentAlignment.TopCenter,
-                Font = new Font("Arial", 8)
+                Font = new Font("Arial", 7),
+                ForeColor = Color.DarkBlue
+            };
+
+            // Метка с информацией для API
+            Label apiInfoLabel = new Label
+            {
+                Text = "→ API: " + officialName,
+                Location = new Point(1, 202),
+                Size = new Size(178, 37),
+                TextAlign = ContentAlignment.TopCenter,
+                Font = new Font("Courier New", 6),
+                ForeColor = Color.Gray
             };
 
             // Обработчик клика
@@ -467,7 +690,24 @@ public partial class Form1 : Form
                 // Выделяем выбранный элемент
                 itemPanel.BackColor = Color.LightBlue;
                 selectedPreviewUrl = previewUrl;
-                selectedItemName = itemName;
+                selectedItemName = itemName; // Используем официальное название для имени файла
+
+                // Загружаем превью только при выборе
+                if (picBox.Image == null && picBox.Tag != null)
+                {
+                    // Убираем плейсхолдер
+                    foreach (Control ctrl in picBox.Controls)
+                    {
+                        if (ctrl is Label)
+                        {
+                            picBox.Controls.Remove(ctrl);
+                            ctrl.Dispose();
+                            break;
+                        }
+                    }
+                    // Загружаем изображение
+                    _ = LoadPreviewImageAsync(picBox, previewUrl);
+                }
 
                 // Показываем выбранное превью
                 ShowSelectedPreview(previewUrl);
@@ -475,15 +715,35 @@ public partial class Form1 : Form
 
             itemPanel.Click += clickHandler;
             picBox.Click += clickHandler;
-            nameLabel.Click += clickHandler;
+            displayLabel.Click += clickHandler;
+            officialLabel.Click += clickHandler;
+            apiInfoLabel.Click += clickHandler;
 
             itemPanel.Controls.Add(picBox);
-            itemPanel.Controls.Add(nameLabel);
+            itemPanel.Controls.Add(displayLabel);
+            itemPanel.Controls.Add(officialLabel);
+            itemPanel.Controls.Add(apiInfoLabel);
+            
+            // Добавляем элемент в галерею
             flpGallery.Controls.Add(itemPanel);
 
-            // Загружаем изображение асинхронно
-            _ = LoadPreviewImageAsync(picBox, previewUrl);
+            // НЕ загружаем изображение сразу - только при клике или выборе
+            // Сохраняем URL для последующей загрузки
+            picBox.Tag = previewUrl;
         }
+        
+        // Принудительно обновляем галерею для отображения всех элементов
+        flpGallery.PerformLayout();
+        
+        // Обновляем размер FlowLayoutPanel вручную для правильного отображения
+        int rows = (int)Math.Ceiling((double)items.Count / 4.0); // Примерно 4 элемента в ряд
+        int height = rows * 250; // 240px высота + 10px отступы
+        flpGallery.Height = Math.Max(height, pnlGallery.Height);
+        flpGallery.Width = pnlGallery.Width - 20; // Учитываем скроллбар
+        
+        pnlGallery.Invalidate();
+        
+        lblStatus.Text = $"Найдено результатов: {items.Count}. Выберите превью из списка.";
     }
 
     private async Task LoadPreviewImageAsync(PictureBox picBox, string url)
@@ -530,9 +790,9 @@ public partial class Form1 : Form
         picPreview.Image = null;
     }
 
-    private List<(string previewUrl, string itemName)> ExtractAllPreviews(string json, ContentType contentType)
+    private List<(string previewUrl, string itemName, string displayName, string officialName, int relevanceScore)> ExtractAllPreviewsWithScore(string json, ContentType contentType, string searchQuery)
     {
-        List<(string, string)> results = new List<(string, string)>();
+        List<(string, string, string, string, int)> results = new List<(string, string, string, string, int)>();
 
         try
         {
@@ -546,15 +806,29 @@ public partial class Form1 : Form
                     foreach (JToken item in dataArray)
                     {
                         string? previewUrl = item["attributes"]?["posterImage"]?["original"]?.ToString();
-                        string? name = item["attributes"]?["canonicalTitle"]?.ToString()
-                            ?? item["attributes"]?["titles"]?["en"]?.ToString()
-                            ?? item["attributes"]?["slug"]?.ToString()
-                            ?? "anime";
+                        if (string.IsNullOrEmpty(previewUrl)) continue;
+
+                        // Извлекаем все варианты названий
+                        JToken? titles = item["attributes"]?["titles"];
+                        string? enTitle = titles?["en"]?.ToString();
+                        string? enJpTitle = titles?["en_jp"]?.ToString();
+                        string? jaJpTitle = titles?["ja_jp"]?.ToString();
+                        string? canonicalTitle = item["attributes"]?["canonicalTitle"]?.ToString();
+                        string? slug = item["attributes"]?["slug"]?.ToString();
                         
-                        if (!string.IsNullOrEmpty(previewUrl))
-                        {
-                            results.Add((previewUrl, name));
-                        }
+                        // Приоритет для официального названия: en_jp > en > canonicalTitle
+                        string officialName = enJpTitle ?? enTitle ?? canonicalTitle ?? "Unknown";
+                        
+                        // Для отображения используем canonicalTitle или первый доступный
+                        string displayName = canonicalTitle ?? enTitle ?? enJpTitle ?? jaJpTitle ?? "Unknown";
+                        
+                        // Для имени файла используем officialName (английское или японское)
+                        string fileName = SanitizeFileName(officialName);
+                        
+                        // Вычисляем релевантность (score)
+                        int relevanceScore = CalculateRelevanceScore(searchQuery, displayName, officialName, enTitle, enJpTitle, canonicalTitle, slug);
+                        
+                        results.Add((previewUrl, fileName, displayName, officialName, relevanceScore));
                     }
                 }
             }
@@ -567,7 +841,9 @@ public partial class Form1 : Form
                     if (previewUrl != "N/A" && !string.IsNullOrEmpty(previewUrl))
                     {
                         string? name = jsonObj["Title"]?.ToString() ?? "movie";
-                        results.Add((previewUrl, name));
+                        string fileName = SanitizeFileName(name);
+                        int score = CalculateRelevanceScore(searchQuery, name, name, name, null, name, null);
+                        results.Add((previewUrl, fileName, name, name, score));
                     }
                 }
             }
@@ -584,7 +860,9 @@ public partial class Form1 : Form
                         if (coverId.HasValue)
                         {
                             string previewUrl = $"https://covers.openlibrary.org/b/id/{coverId}-L.jpg";
-                            results.Add((previewUrl, name));
+                            string fileName = SanitizeFileName(name);
+                            int score = CalculateRelevanceScore(searchQuery, name, name, name, null, name, null);
+                            results.Add((previewUrl, fileName, name, name, score));
                         }
                     }
                 }
@@ -595,7 +873,126 @@ public partial class Form1 : Form
             // Игнорируем ошибки парсинга
         }
 
+        // Сортируем по релевантности (больший score = выше)
+        results.Sort((a, b) => b.Item5.CompareTo(a.Item5));
+
         return results;
+    }
+
+    private int CalculateRelevanceScore(string searchQuery, string? displayName, string? officialName, string? enTitle, string? enJpTitle, string? canonicalTitle, string? slug)
+    {
+        if (string.IsNullOrEmpty(searchQuery)) return 0;
+        
+        int score = 0;
+        string searchLower = searchQuery.ToLowerInvariant().Trim();
+        
+        // Проверяем точное совпадение (максимальный балл)
+        if (displayName != null && displayName.Equals(searchQuery, StringComparison.OrdinalIgnoreCase))
+            score += 10000;
+        if (officialName != null && officialName.Equals(searchQuery, StringComparison.OrdinalIgnoreCase))
+            score += 10000;
+        
+        // Проверяем начало названия (очень высокий приоритет)
+        if (displayName != null && displayName.StartsWith(searchQuery, StringComparison.OrdinalIgnoreCase))
+            score += 5000;
+        if (officialName != null && officialName.StartsWith(searchQuery, StringComparison.OrdinalIgnoreCase))
+            score += 5000;
+        
+        // Проверяем, содержит ли название все слова из запроса
+        string[] searchWords = searchLower.Split(new[] { ' ', '-', '_', ',', '.', '!' }, StringSplitOptions.RemoveEmptyEntries);
+        int allWordsMatch = 0;
+        int partialWordsMatch = 0;
+        
+        foreach (string word in searchWords)
+        {
+            if (word.Length < 2) continue; // Пропускаем слишком короткие слова
+            
+            bool wordFound = false;
+            
+            if (displayName != null && displayName.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            if (officialName != null && officialName.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            if (enTitle != null && enTitle.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            if (enJpTitle != null && enJpTitle.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            if (canonicalTitle != null && canonicalTitle.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            if (slug != null && slug.ToLowerInvariant().Contains(word))
+            {
+                wordFound = true;
+                allWordsMatch++;
+            }
+            
+            if (!wordFound)
+            {
+                // Частичное совпадение (например, "hero" в "heroic")
+                if (displayName != null && displayName.ToLowerInvariant().IndexOf(word) >= 0)
+                    partialWordsMatch++;
+                if (officialName != null && officialName.ToLowerInvariant().IndexOf(word) >= 0)
+                    partialWordsMatch++;
+            }
+        }
+        
+        // Большой бонус, если все слова найдены
+        if (allWordsMatch >= searchWords.Length * 2) // Умножаем на 2, т.к. проверяем несколько полей
+            score += 3000;
+        else if (allWordsMatch > 0)
+            score += allWordsMatch * 200;
+        
+        // Меньший бонус за частичные совпадения
+        score += partialWordsMatch * 50;
+        
+        // Специальная проверка для популярных аниме (My Hero Academia, Attack on Titan и т.д.)
+        // Проверяем ключевые слова из русского запроса
+        if (searchLower.Contains("герой") || searchLower.Contains("hero"))
+        {
+            if (officialName != null && (officialName.ToLowerInvariant().Contains("hero") && officialName.ToLowerInvariant().Contains("academia")))
+                score += 3000;
+            if (displayName != null && (displayName.ToLowerInvariant().Contains("hero") && displayName.ToLowerInvariant().Contains("academia")))
+                score += 3000;
+        }
+        
+        if (searchLower.Contains("академия") || searchLower.Contains("academia"))
+        {
+            if (officialName != null && officialName.ToLowerInvariant().Contains("academia"))
+                score += 1500;
+            if (displayName != null && displayName.ToLowerInvariant().Contains("academia"))
+                score += 1500;
+        }
+        
+        // Проверка для Attack on Titan
+        if (searchLower.Contains("титан") || searchLower.Contains("titan"))
+        {
+            if (officialName != null && officialName.ToLowerInvariant().Contains("titan"))
+                score += 2000;
+            if (displayName != null && displayName.ToLowerInvariant().Contains("titan"))
+                score += 2000;
+        }
+        
+        return score;
+    }
+
+    private List<(string previewUrl, string itemName, string displayName, string officialName)> ExtractAllPreviews(string json, ContentType contentType)
+    {
+        // Для обратной совместимости, вызываем новую версию без релевантности
+        return ExtractAllPreviewsWithScore(json, contentType, "").Select(r => (r.Item1, r.Item2, r.Item3, r.Item4)).ToList();
     }
 
     private async void BtnDownloadSelected_Click(object? sender, EventArgs e)
@@ -657,8 +1054,10 @@ public partial class Form1 : Form
     // Методы для аниме (Kitsu API)
     private async Task<(string? previewUrl, string itemName)> SearchAnimeAsync(string animeName)
     {
-        string encodedName = Uri.EscapeDataString(animeName.ToLower());
-        string apiUrl = $"https://kitsu.io/api/edge/anime?filter[text]={encodedName}";
+        // Не используем ToLower() - Kitsu API поддерживает поиск на русском и других языках
+        // Увеличиваем лимит для получения большего количества результатов
+        string encodedName = Uri.EscapeDataString(animeName);
+        string apiUrl = $"https://kitsu.io/api/edge/anime?filter[text]={encodedName}&page[limit]=20";
         string jsonResponse = await DownloadJsonAsync(apiUrl);
         return ExtractAnimeData(jsonResponse);
     }
