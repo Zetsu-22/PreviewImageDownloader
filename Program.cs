@@ -1,3 +1,5 @@
+using PreviewImageDownloader.Forms;
+
 namespace PreviewImageDownloader;
 
 static class Program

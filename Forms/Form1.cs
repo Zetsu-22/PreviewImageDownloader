@@ -1,33 +1,17 @@
 using Newtonsoft.Json.Linq;
 using System.Text;
 using System.Linq;
+using PreviewImageDownloader.Models;
 
-namespace PreviewImageDownloader;
-
-public enum ContentType
-{
-    Anime,
-    Movie,
-    Series,
-    Book
-}
+namespace PreviewImageDownloader.Forms;
 
 public partial class Form1 : Form
 {
     private readonly string cachePath;
     private readonly string settingsPath;
-    private TextBox txtSearchName = null!;
-    private Button btnDownload = null!;
-    private Button btnSettings = null!;
-    private Label lblStatus = null!;
-    private ComboBox cmbContentType = null!;
-    private RadioButton rbSearchByName = null!;
-    private RadioButton rbApiUrl = null!;
-    private TextBox txtApiUrl = null!;
-    private PictureBox picPreview = null!;
-    private Panel pnlGallery = null!;
-    private FlowLayoutPanel flpGallery = null!;
-    private Button btnDownloadSelected = null!;
+    
+    private string? selectedTitle = null;
+    private string? selectedTitleOfficial = null;
     private string? selectedPreviewUrl = null;
     private string? selectedItemName = null;
 
@@ -48,251 +32,62 @@ public partial class Form1 : Form
 
         // Загружаем настройки
         LoadSettings();
+        
+        // Form1_Load уже подписан в InitializeComponent
     }
 
-    private void InitializeComponent()
+    private void Form1_Load(object? sender, EventArgs e)
     {
-        this.Text = "Preview Image Downloader";
-        this.Size = new Size(900, 700);
-        this.StartPosition = FormStartPosition.CenterScreen;
-
-        // Выбор типа контента
-        Label lblContentType = new Label
+        // Инициализируем Items для ComboBox (не в дизайнере)
+        if (cmbContentType != null && cmbContentType.Items.Count == 0)
         {
-            Text = "Тип контента:",
-            Location = new Point(20, 20),
-            Size = new Size(100, 25)
-        };
+            cmbContentType.Items.AddRange(new[] { "Аниме", "Фильм", "Сериал", "Книга" });
+            cmbContentType.SelectedIndex = 0;
+        }
+        // Инициализируем список API после полной загрузки формы
+        UpdateCoverApiOptions();
+    }
 
-        cmbContentType = new ComboBox
+    private void UpdateCoverApiOptions()
+    {
+        // Не выполняем в режиме дизайнера
+        if (DesignMode || cmbCoverApi == null || cmbContentType == null) return;
+        
+        cmbCoverApi.Items.Clear();
+        ContentType contentType = (ContentType)cmbContentType.SelectedIndex;
+        
+        switch (contentType)
         {
-            Location = new Point(130, 18),
-            Size = new Size(200, 25),
-            DropDownStyle = ComboBoxStyle.DropDownList
-        };
-        cmbContentType.Items.AddRange(new[] { "Аниме", "Фильм", "Сериал", "Книга" });
-        cmbContentType.SelectedIndex = 0;
-        cmbContentType.SelectedIndexChanged += CmbContentType_SelectedIndexChanged;
-
-        // Кнопка настроек
-        btnSettings = new Button
+            case ContentType.Anime:
+                cmbCoverApi.Items.AddRange(new[] { "Kitsu API", "Jikan API" });
+                break;
+            case ContentType.Movie:
+            case ContentType.Series:
+                List<string> movieApis = new List<string> { "OMDb API" };
+                // Проверяем наличие ключа только во время выполнения, не в дизайнере
+                if (!DesignMode && !string.IsNullOrEmpty(GetKinopoiskApiKey()))
+                {
+                    movieApis.Insert(0, "Kinopoisk API");
+                }
+                cmbCoverApi.Items.AddRange(movieApis.ToArray());
+                break;
+            case ContentType.Book:
+                cmbCoverApi.Items.AddRange(new[] { "Open Library API" });
+                break;
+        }
+        if (cmbCoverApi.Items.Count > 0)
         {
-            Text = "Настройки",
-            Location = new Point(350, 17),
-            Size = new Size(100, 27)
-        };
-        btnSettings.Click += BtnSettings_Click;
-
-        // RadioButton для выбора режима
-        rbSearchByName = new RadioButton
-        {
-            Text = "Поиск по названию",
-            Location = new Point(20, 60),
-            Size = new Size(150, 25),
-            Checked = true
-        };
-
-        rbApiUrl = new RadioButton
-        {
-            Text = "По API URL",
-            Location = new Point(180, 60),
-            Size = new Size(120, 25)
-        };
-
-        // Поле для поиска по названию
-        Label lblSearchName = new Label
-        {
-            Text = "Название:",
-            Location = new Point(20, 95),
-            Size = new Size(100, 25)
-        };
-
-        txtSearchName = new TextBox
-        {
-            Location = new Point(20, 120),
-            Size = new Size(640, 25),
-            Enabled = true
-        };
-
-        // Поле для API URL
-        Label lblApiUrl = new Label
-        {
-            Text = "API URL:",
-            Location = new Point(20, 95),
-            Size = new Size(100, 25),
-            Visible = false
-        };
-
-        txtApiUrl = new TextBox
-        {
-            Location = new Point(20, 120),
-            Size = new Size(640, 25),
-            Enabled = false,
-            Visible = false
-        };
-
-        // Кнопка скачивания
-        btnDownload = new Button
-        {
-            Text = "Скачать превью",
-            Location = new Point(20, 160),
-            Size = new Size(200, 35)
-        };
-        btnDownload.Click += BtnDownload_Click;
-
-        // Статус
-        lblStatus = new Label
-        {
-            Text = "Готов к работе",
-            Location = new Point(20, 205),
-            Size = new Size(640, 25)
-        };
-
-        // Панель для галереи превью
-        Label lblGallery = new Label
-        {
-            Text = "Результаты поиска (выберите превью):",
-            Location = new Point(20, 240),
-            Size = new Size(300, 25),
-            Visible = false
-        };
-
-        pnlGallery = new Panel
-        {
-            Location = new Point(20, 265),
-            Size = new Size(840, 380),
-            AutoScroll = true,
-            BorderStyle = BorderStyle.FixedSingle,
-            Visible = false
-        };
-
-        flpGallery = new FlowLayoutPanel
-        {
-            Location = new Point(0, 0),
-            AutoSize = true,
-            AutoScroll = false,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = true,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
-        };
-        pnlGallery.Controls.Add(flpGallery);
-
-        // Кнопка скачивания выбранного превью
-        btnDownloadSelected = new Button
-        {
-            Text = "Скачать выбранное превью",
-            Location = new Point(20, 625),
-            Size = new Size(200, 35),
-            Visible = false
-        };
-        btnDownloadSelected.Click += BtnDownloadSelected_Click;
-
-        // PictureBox для превью (скрыт по умолчанию)
-        Label lblPreview = new Label
-        {
-            Text = "Выбранное превью:",
-            Location = new Point(240, 625),
-            Size = new Size(150, 25),
-            Visible = false
-        };
-
-        picPreview = new PictureBox
-        {
-            Location = new Point(240, 650),
-            Size = new Size(150, 210),
-            SizeMode = PictureBoxSizeMode.Zoom,
-            BorderStyle = BorderStyle.FixedSingle,
-            Visible = false
-        };
-
-        // Обработчики для RadioButton
-        rbSearchByName.CheckedChanged += (s, e) =>
-        {
-            txtSearchName.Enabled = rbSearchByName.Checked;
-            txtSearchName.Visible = rbSearchByName.Checked;
-            txtApiUrl.Enabled = rbApiUrl.Checked;
-            txtApiUrl.Visible = rbApiUrl.Checked;
-            lblSearchName.Visible = rbSearchByName.Checked;
-            lblApiUrl.Visible = rbApiUrl.Checked;
-        };
-
-        rbApiUrl.CheckedChanged += (s, e) =>
-        {
-            txtSearchName.Enabled = rbSearchByName.Checked;
-            txtSearchName.Visible = rbSearchByName.Checked;
-            txtApiUrl.Enabled = rbApiUrl.Checked;
-            txtApiUrl.Visible = rbApiUrl.Checked;
-            lblSearchName.Visible = rbSearchByName.Checked;
-            lblApiUrl.Visible = rbApiUrl.Checked;
-            
-            // Устанавливаем шаблон URL при выборе режима API URL
-            if (rbApiUrl.Checked)
-            {
-                UpdateApiUrlTemplate();
-            }
-        };
-
-        // Добавляем элементы на форму
-        this.Controls.Add(lblContentType);
-        this.Controls.Add(cmbContentType);
-        this.Controls.Add(btnSettings);
-        this.Controls.Add(rbSearchByName);
-        this.Controls.Add(rbApiUrl);
-        this.Controls.Add(lblSearchName);
-        this.Controls.Add(txtSearchName);
-        this.Controls.Add(lblApiUrl);
-        this.Controls.Add(txtApiUrl);
-        this.Controls.Add(btnDownload);
-        this.Controls.Add(lblStatus);
-        this.Controls.Add(lblGallery);
-        this.Controls.Add(pnlGallery);
-        this.Controls.Add(btnDownloadSelected);
-        this.Controls.Add(lblPreview);
-        this.Controls.Add(picPreview);
-
-        // Обработчик закрытия формы для сохранения настроек
-        this.FormClosing += Form1_FormClosing;
+            cmbCoverApi.SelectedIndex = 0;
+        }
     }
 
     private void CmbContentType_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        // Обновляем подсказки в зависимости от типа контента
-        string placeholder = cmbContentType.SelectedIndex switch
+        // Обновляем список доступных API для обложки (только во время выполнения)
+        if (!DesignMode)
         {
-            0 => "Введите название аниме на русском или английском (например: моя геройская академия или my hero academia)",
-            1 => "Введите название фильма (например: Fight Club)",
-            2 => "Введите название сериала (например: Breaking Bad)",
-            3 => "Введите название книги (например: The Witcher)",
-            _ => "Введите название"
-        };
-        txtSearchName.PlaceholderText = placeholder;
-        
-        // Обновляем шаблон URL если активен режим API URL
-        if (rbApiUrl.Checked)
-        {
-            UpdateApiUrlTemplate();
+            UpdateCoverApiOptions();
         }
-    }
-
-    private void UpdateApiUrlTemplate()
-    {
-        ContentType contentType = (ContentType)cmbContentType.SelectedIndex;
-        string apiKey = GetOmdbApiKey();
-        
-        string template = contentType switch
-        {
-            ContentType.Anime => "https://kitsu.io/api/edge/anime?filter[text]={название_на_любом_языке}",
-            ContentType.Movie => string.IsNullOrEmpty(apiKey) 
-                ? "http://www.omdbapi.com/?apikey={ваш_ключ}&t={название_фильма}&type=movie"
-                : $"http://www.omdbapi.com/?apikey={apiKey}&t={{название_фильма}}&type=movie",
-            ContentType.Series => string.IsNullOrEmpty(apiKey)
-                ? "http://www.omdbapi.com/?apikey={ваш_ключ}&t={название_сериала}&type=series"
-                : $"http://www.omdbapi.com/?apikey={apiKey}&t={{название_сериала}}&type=series",
-            ContentType.Book => "https://openlibrary.org/search.json?title={название_книги}",
-            _ => ""
-        };
-        
-        txtApiUrl.Text = template;
     }
 
     private void BtnSettings_Click(object? sender, EventArgs e)
@@ -301,14 +96,265 @@ public partial class Form1 : Form
         {
             if (settingsForm.ShowDialog(this) == DialogResult.OK)
             {
-                // Настройки сохранены в форме SettingsForm
-                // Обновляем шаблон URL если активен режим API URL
-                if (rbApiUrl.Checked)
-                {
-                    UpdateApiUrlTemplate();
-                }
+                // Настройки сохранены, обновляем список API
+                UpdateCoverApiOptions();
             }
         }
+    }
+
+    // ========== ЭТАП 1: ПОИСК НАЗВАНИЯ ЧЕРЕЗ КИНОПОИСК ==========
+    private async void BtnSearchTitle_Click(object? sender, EventArgs e)
+    {
+        try
+        {
+            btnSearchTitle.Enabled = false;
+            lblStatus.Text = "Поиск названия через Кинопоиск...";
+            
+            string searchQuery = txtSearchTitle.Text.Trim();
+            if (string.IsNullOrEmpty(searchQuery))
+            {
+                MessageBox.Show("Введите название для поиска", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Очищаем предыдущие результаты
+            flpTitleResults.Controls.Clear();
+            selectedTitle = null;
+            selectedTitleOfficial = null;
+            lblSelectedTitle.Text = "Выбранное название: не выбрано";
+            lblSelectedTitle.ForeColor = Color.Gray;
+
+            // Поиск через Кинопоиск API
+            string kinopoiskApiKey = GetKinopoiskApiKey();
+            if (string.IsNullOrEmpty(kinopoiskApiKey))
+            {
+                MessageBox.Show("Kinopoisk API ключ не настроен. Нажмите 'Настройки' для ввода ключа.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string url = $"https://api.kinopoisk.dev/v1.4/movie/search?query={Uri.EscapeDataString(searchQuery)}&limit=20";
+            Dictionary<string, string> headers = new Dictionary<string, string>
+            {
+                ["X-API-KEY"] = kinopoiskApiKey
+            };
+            
+            string jsonResponse = await GetJsonFromUrlAsync(url, headers);
+            
+            // Логируем ответ от Кинопоиска для отладки
+            string logsDir = Path.Combine(Application.StartupPath, "logs");
+            if (!Directory.Exists(logsDir))
+            {
+                Directory.CreateDirectory(logsDir);
+            }
+            
+            string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+            string logFileName = $"kinopoisk_response_{timestamp}_{Uri.EscapeDataString(searchQuery)}.json";
+            string logPath = Path.Combine(logsDir, logFileName);
+            
+            try
+            {
+                // Сохраняем полный ответ
+                File.WriteAllText(logPath, jsonResponse, Encoding.UTF8);
+                
+                // Также сохраняем в общий файл логов с временной меткой
+                string generalLogPath = Path.Combine(logsDir, "kinopoisk_responses.log");
+                string separator = new string('=', 80);
+                string logEntry = $"\n{separator}\n" +
+                                 $"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n" +
+                                 $"Запрос: {searchQuery}\n" +
+                                 $"URL: {url}\n" +
+                                 $"Размер ответа: {jsonResponse.Length} символов\n" +
+                                 $"Файл: {logFileName}\n" +
+                                 $"{separator}\n" +
+                                 $"{jsonResponse}\n";
+                File.AppendAllText(generalLogPath, logEntry, Encoding.UTF8);
+                
+                // Показываем информацию пользователю
+                lblStatus.Text = $"Ответ сохранен в: {logPath}";
+                System.Diagnostics.Debug.WriteLine($"Ответ от Кинопоиска сохранен в: {logPath}");
+                
+                // Опционально: открываем файл в блокноте
+                // System.Diagnostics.Process.Start("notepad.exe", logPath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Не удалось сохранить ответ: {ex.Message}");
+                lblStatus.Text = $"Ошибка сохранения лога: {ex.Message}";
+            }
+            
+            JObject jsonObj = JObject.Parse(jsonResponse);
+            JArray? docsArray = jsonObj["docs"] as JArray;
+
+            if (docsArray == null || docsArray.Count == 0)
+            {
+                MessageBox.Show("Не найдено результатов", "Информация", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatus.Text = "Результаты не найдены";
+                return;
+            }
+
+            // Отображаем результаты
+            foreach (JToken doc in docsArray)
+            {
+                string? name = doc["name"]?.ToString();
+                string? alternativeName = doc["alternativeName"]?.ToString();
+                string? enName = doc["enName"]?.ToString();
+                
+                if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(alternativeName) && string.IsNullOrEmpty(enName))
+                    continue;
+
+                // Создаем кнопку для выбора названия
+                Button titleButton = new Button
+                {
+                    Text = $"{name ?? alternativeName ?? enName}\n{(string.IsNullOrEmpty(enName) ? alternativeName : enName)}",
+                    Size = new Size(200, 60),
+                    Margin = new Padding(5),
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Font = new Font("Arial", 9)
+                };
+
+                string displayName = name ?? alternativeName ?? enName ?? "Unknown";
+
+                // Сохраняем весь объект doc в Tag кнопки для доступа ко всем названиям
+                titleButton.Tag = doc;
+
+                titleButton.Click += (s, args) =>
+                {
+                    // Выделяем выбранную кнопку
+                    foreach (Control ctrl in flpTitleResults.Controls)
+                    {
+                        if (ctrl is Button btn)
+                        {
+                            btn.BackColor = SystemColors.Control;
+                            btn.ForeColor = SystemColors.ControlText;
+                        }
+                    }
+                    titleButton.BackColor = Color.LightBlue;
+                    titleButton.ForeColor = Color.DarkBlue;
+
+                    // Показываем диалог выбора названия
+                    if (titleButton.Tag is JToken docToken)
+                    {
+                        using (TitleSelectionForm selectionForm = new TitleSelectionForm(docToken))
+                        {
+                            if (selectionForm.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(selectionForm.SelectedTitle))
+                            {
+                                selectedTitle = displayName; // Для отображения используем основное название
+                                selectedTitleOfficial = selectionForm.SelectedTitle; // Для поиска используем выбранное название
+                                lblSelectedTitle.Text = $"Выбранное название: {displayName} → {selectionForm.SelectedTitle}";
+                                lblSelectedTitle.ForeColor = Color.Black;
+
+                                // Активируем этап 2
+                                GroupBox? grpStep2 = this.Controls.OfType<GroupBox>().FirstOrDefault(g => g.Text.Contains("Шаг 2"));
+                                if (grpStep2 != null)
+                                {
+                                    grpStep2.Enabled = true;
+                                    btnSearchCover.Enabled = true;
+                                    lblStatus.Text = $"Готово к поиску обложки для: {selectionForm.SelectedTitle}";
+                                    lblStatus.ForeColor = Color.Black;
+                                }
+                            }
+                        }
+                    }
+                };
+
+                flpTitleResults.Controls.Add(titleButton);
+            }
+
+            lblStatus.Text = $"Найдено результатов: {docsArray.Count}. Выберите точное название.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка при поиске: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            lblStatus.Text = $"Ошибка: {ex.Message}";
+        }
+        finally
+        {
+            btnSearchTitle.Enabled = true;
+        }
+    }
+
+    // ========== ЭТАП 2: ПОИСК ОБЛОЖКИ ПО ВЫБРАННОМУ НАЗВАНИЮ ==========
+    private async void BtnSearchCover_Click(object? sender, EventArgs e)
+    {
+        if (string.IsNullOrEmpty(selectedTitle) && string.IsNullOrEmpty(selectedTitleOfficial))
+        {
+            MessageBox.Show("Сначала выберите название в шаге 1", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            btnSearchCover.Enabled = false;
+            lblStatus.Text = "Поиск обложки...";
+            HideGallery();
+
+            ContentType contentType = (ContentType)cmbContentType.SelectedIndex;
+            string selectedApi = cmbCoverApi.SelectedItem?.ToString() ?? "";
+
+            // Используем официальное название для поиска
+            string searchName = selectedTitleOfficial ?? selectedTitle ?? "";
+
+            string jsonResponse = await GetCoverSearchResponseAsync(searchName, contentType, selectedApi);
+            
+            // Показываем галерею с результатами
+            ShowGalleryAsync(jsonResponse, contentType);
+            lblStatus.Text = "Результаты отсортированы по релевантности. Выберите обложку из списка.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            lblStatus.Text = $"Ошибка: {ex.Message}";
+            HideGallery();
+        }
+        finally
+        {
+            btnSearchCover.Enabled = true;
+        }
+    }
+
+    private async Task<string> GetCoverSearchResponseAsync(string searchName, ContentType contentType, string selectedApi)
+    {
+        switch (contentType)
+        {
+            case ContentType.Anime:
+                if (selectedApi == "Kitsu API")
+                {
+                    return await GetJsonFromUrlAsync($"https://kitsu.io/api/edge/anime?filter[text]={Uri.EscapeDataString(searchName)}&page[limit]=20");
+                }
+                else if (selectedApi == "Jikan API")
+                {
+                    string jikanResponse = await GetJsonFromUrlAsync($"https://api.jikan.moe/v4/anime?q={Uri.EscapeDataString(searchName)}&limit=20");
+                    return ConvertJikanToKitsuFormat(jikanResponse);
+                }
+                break;
+
+            case ContentType.Movie:
+            case ContentType.Series:
+                if (selectedApi == "Kinopoisk API")
+                {
+                    string kinopoiskApiKey = GetKinopoiskApiKey();
+                    if (!string.IsNullOrEmpty(kinopoiskApiKey))
+                    {
+                        string url = $"https://api.kinopoisk.dev/v1.4/movie/search?query={Uri.EscapeDataString(searchName)}&limit=20";
+                        Dictionary<string, string> headers = new Dictionary<string, string>
+                        {
+                            ["X-API-KEY"] = kinopoiskApiKey
+                        };
+                        return await GetJsonFromUrlAsync(url, headers);
+                    }
+                }
+                else if (selectedApi == "OMDb API")
+                {
+                    string type = contentType == ContentType.Movie ? "movie" : "series";
+                    return await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type={type}");
+                }
+                break;
+
+            case ContentType.Book:
+                return await GetJsonFromUrlAsync($"https://openlibrary.org/search.json?title={Uri.EscapeDataString(searchName)}");
+        }
+
+        throw new Exception("Неизвестный тип контента или API");
     }
 
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
@@ -323,61 +369,6 @@ public partial class Form1 : Form
         // Основная загрузка теперь в SettingsForm
     }
 
-    private async void BtnDownload_Click(object? sender, EventArgs e)
-    {
-        try
-        {
-            btnDownload.Enabled = false;
-            lblStatus.Text = "Обработка...";
-
-            // Скрываем галерею
-            HideGallery();
-
-            ContentType contentType = (ContentType)cmbContentType.SelectedIndex;
-            string jsonResponse;
-
-            if (rbApiUrl.Checked)
-            {
-                string apiUrl = txtApiUrl.Text.Trim();
-                if (string.IsNullOrEmpty(apiUrl))
-                {
-                    MessageBox.Show("Введите API URL", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                lblStatus.Text = "Загрузка данных из API...";
-                lastSearchQuery = null; // Сбрасываем для API URL
-                jsonResponse = await DownloadJsonAsync(apiUrl);
-            }
-            else
-            {
-                string searchName = txtSearchName.Text.Trim();
-                if (string.IsNullOrEmpty(searchName))
-                {
-                    MessageBox.Show("Введите название", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-            }
-
-            lblStatus.Text = "Загрузка данных из API...";
-                lastSearchQuery = searchName; // Сохраняем запрос для ранжирования
-                jsonResponse = await GetSearchJsonResponseAsync(searchName, contentType);
-            }
-
-            // Показываем галерею с результатами
-            ShowGalleryAsync(jsonResponse, contentType);
-            lblStatus.Text = "Результаты отсортированы по релевантности. Выберите превью из списка.";
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            lblStatus.Text = $"Ошибка: {ex.Message}";
-            HideGallery();
-        }
-        finally
-        {
-            btnDownload.Enabled = true;
-        }
-    }
 
     private async Task<string> GetSearchJsonResponseAsync(string searchName, ContentType contentType)
     {
@@ -490,8 +481,8 @@ public partial class Form1 : Form
         
         return contentType switch
         {
-            ContentType.Movie => await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=movie"),
-            ContentType.Series => await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=series"),
+            ContentType.Movie => await GetMovieSearchResponseAsync(searchName),
+            ContentType.Series => await GetSeriesSearchResponseAsync(searchName),
             ContentType.Book => await GetJsonFromUrlAsync($"https://openlibrary.org/search.json?title={Uri.EscapeDataString(searchName)}"),
             _ => throw new Exception("Неизвестный тип контента")
         };
@@ -550,18 +541,30 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task<string> GetJsonFromUrlAsync(string url)
+    private async Task<string> GetJsonFromUrlAsync(string url, Dictionary<string, string>? headers = null)
     {
         using (HttpClient client = new HttpClient())
         {
             client.Timeout = TimeSpan.FromSeconds(30);
-            HttpResponseMessage response = await client.GetAsync(url);
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadAsStringAsync();
+            
+            // Используем HttpRequestMessage для более точного контроля заголовков
+            using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url))
+            {
+                // Добавляем заголовки, если они указаны
+                if (headers != null)
+                {
+                    foreach (var header in headers)
+                    {
+                        request.Headers.Add(header.Key, header.Value);
+                    }
+                }
+                
+                HttpResponseMessage response = await client.SendAsync(request);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
         }
     }
-
-    private string? lastSearchQuery = null;
 
     private void ShowGalleryAsync(string jsonResponse, ContentType contentType)
     {
@@ -570,15 +573,16 @@ public partial class Form1 : Form
         selectedPreviewUrl = null;
         selectedItemName = null;
 
-        // Используем улучшенную версию с ранжированием, если есть поисковый запрос
+        // Используем выбранное название для ранжирования
+        string searchQuery = selectedTitleOfficial ?? selectedTitle ?? "";
         List<(string previewUrl, string itemName, string displayName, string officialName, int relevanceScore)> itemsWithScore;
         
-        if (!string.IsNullOrEmpty(lastSearchQuery))
+        if (!string.IsNullOrEmpty(searchQuery))
         {
-            itemsWithScore = ExtractAllPreviewsWithScore(jsonResponse, contentType, lastSearchQuery);
-        }
-        else
-        {
+            itemsWithScore = ExtractAllPreviewsWithScore(jsonResponse, contentType, searchQuery);
+            }
+            else
+            {
             // Если нет поискового запроса, используем старый метод
             var itemsWithoutScore = ExtractAllPreviews(jsonResponse, contentType);
             itemsWithScore = itemsWithoutScore.Select(i => (i.Item1, i.Item2, i.Item3, i.Item4, 0)).ToList();
@@ -590,8 +594,8 @@ public partial class Form1 : Form
         if (items.Count == 0)
         {
             MessageBox.Show("Не найдено результатов", "Информация", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
+                    return;
+                }
 
         // Показываем галерею
         Label? lblGallery = this.Controls.OfType<Label>().FirstOrDefault(l => l.Text.Contains("Результаты поиска"));
@@ -786,7 +790,7 @@ public partial class Form1 : Form
         Label? lblPreview = this.Controls.OfType<Label>().FirstOrDefault(l => l.Text.Contains("Выбранное превью"));
         if (lblPreview != null) lblPreview.Visible = false;
         picPreview.Visible = false;
-        picPreview.Image?.Dispose();
+            picPreview.Image?.Dispose();
         picPreview.Image = null;
     }
 
@@ -834,16 +838,44 @@ public partial class Form1 : Form
             }
             else if (contentType == ContentType.Movie || contentType == ContentType.Series)
             {
-                // OMDb возвращает один результат, но проверим на ошибку
-                if (jsonObj["Response"]?.ToString() != "False")
+                // Проверяем, это Kinopoisk API (массив docs) или OMDb API (один объект)
+                JArray? docsArray = jsonObj["docs"] as JArray;
+                if (docsArray != null)
                 {
-                    string? previewUrl = jsonObj["Poster"]?.ToString();
-                    if (previewUrl != "N/A" && !string.IsNullOrEmpty(previewUrl))
+                    // Kinopoisk API формат
+                    foreach (JToken doc in docsArray)
                     {
-                        string? name = jsonObj["Title"]?.ToString() ?? "movie";
-                        string fileName = SanitizeFileName(name);
-                        int score = CalculateRelevanceScore(searchQuery, name, name, name, null, name, null);
-                        results.Add((previewUrl, fileName, name, name, score));
+                        JToken? poster = doc["poster"];
+                        string? previewUrl = poster?["url"]?.ToString();
+                        if (string.IsNullOrEmpty(previewUrl)) continue;
+
+                        string? name = doc["name"]?.ToString();
+                        string? alternativeName = doc["alternativeName"]?.ToString();
+                        string? enName = doc["enName"]?.ToString();
+                        
+                        // Для отображения используем русское название
+                        string displayName = name ?? alternativeName ?? enName ?? "Unknown";
+                        // Для официального названия используем английское или альтернативное
+                        string officialName = enName ?? alternativeName ?? name ?? "Unknown";
+                        
+                        string fileName = SanitizeFileName(officialName);
+                        int score = CalculateRelevanceScore(searchQuery, displayName, officialName, enName, null, alternativeName, null);
+                        results.Add((previewUrl, fileName, displayName, officialName, score));
+                    }
+                }
+                else
+                {
+                    // OMDb API формат - возвращает один результат
+                    if (jsonObj["Response"]?.ToString() != "False")
+                    {
+                        string? previewUrl = jsonObj["Poster"]?.ToString();
+                        if (previewUrl != "N/A" && !string.IsNullOrEmpty(previewUrl))
+                        {
+                            string? name = jsonObj["Title"]?.ToString() ?? "movie";
+                            string fileName = SanitizeFileName(name);
+                            int score = CalculateRelevanceScore(searchQuery, name, name, name, null, name, null);
+                            results.Add((previewUrl, fileName, name, name, score));
+                        }
                     }
                 }
             }
@@ -1197,6 +1229,24 @@ public partial class Form1 : Form
         return "";
     }
 
+    private string GetKinopoiskApiKey()
+    {
+        try
+        {
+            if (File.Exists(settingsPath))
+            {
+                string json = File.ReadAllText(settingsPath);
+                JObject settings = JObject.Parse(json);
+                return settings["KinopoiskApiKey"]?.ToString() ?? "";
+            }
+        }
+        catch
+        {
+            // Игнорируем ошибки
+        }
+        return "";
+    }
+
     private string SanitizeFileName(string fileName)
     {
         string sanitized = fileName.ToLower().Replace(" ", "_");
@@ -1209,12 +1259,86 @@ public partial class Form1 : Form
         using (HttpClient client = new HttpClient())
         {
             client.Timeout = TimeSpan.FromSeconds(30);
+            
+            // Авторизация для Kinopoisk API:
+            // Токен НЕ передается в URL, а добавляется в HTTP-заголовок X-API-KEY
+            // Это происходит автоматически для каждого запроса к api.kinopoisk.dev
+            // Отдельный запрос для авторизации НЕ требуется
+            if (url.Contains("api.kinopoisk.dev"))
+            {
+                string apiKey = GetKinopoiskApiKey();
+                if (!string.IsNullOrEmpty(apiKey))
+                {
+                    // Используем HttpRequestMessage для добавления заголовка X-API-KEY
+                    using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url))
+                    {
+                        // Токен встраивается в заголовок запроса, а не в URL
+                        request.Headers.Add("X-API-KEY", apiKey);
+                        HttpResponseMessage kinopoiskResponse = await client.SendAsync(request);
+                        kinopoiskResponse.EnsureSuccessStatusCode();
+                        return await kinopoiskResponse.Content.ReadAsStringAsync();
+                    }
+                }
+            }
+            
             HttpResponseMessage response = await client.GetAsync(url);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
         }
     }
 
+
+    private async Task<string> GetMovieSearchResponseAsync(string searchName)
+    {
+        string kinopoiskApiKey = GetKinopoiskApiKey();
+        
+        // Пробуем сначала Kinopoisk API, если есть ключ
+        if (!string.IsNullOrEmpty(kinopoiskApiKey))
+        {
+            try
+            {
+                string url = $"https://api.kinopoisk.dev/v1.4/movie/search?query={Uri.EscapeDataString(searchName)}&limit=20";
+                Dictionary<string, string> headers = new Dictionary<string, string>
+                {
+                    ["X-API-KEY"] = kinopoiskApiKey
+                };
+                return await GetJsonFromUrlAsync(url, headers);
+            }
+            catch
+            {
+                // Если Kinopoisk не сработал, пробуем OMDb
+            }
+        }
+        
+        // Fallback на OMDb API
+        return await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=movie");
+    }
+
+    private async Task<string> GetSeriesSearchResponseAsync(string searchName)
+    {
+        string kinopoiskApiKey = GetKinopoiskApiKey();
+        
+        // Пробуем сначала Kinopoisk API, если есть ключ
+        if (!string.IsNullOrEmpty(kinopoiskApiKey))
+        {
+            try
+            {
+                string url = $"https://api.kinopoisk.dev/v1.4/movie/search?query={Uri.EscapeDataString(searchName)}&limit=20";
+                Dictionary<string, string> headers = new Dictionary<string, string>
+                {
+                    ["X-API-KEY"] = kinopoiskApiKey
+                };
+                return await GetJsonFromUrlAsync(url, headers);
+            }
+            catch
+            {
+                // Если Kinopoisk не сработал, пробуем OMDb
+            }
+        }
+        
+        // Fallback на OMDb API
+        return await GetJsonFromUrlAsync($"http://www.omdbapi.com/?apikey={GetOmdbApiKey()}&t={Uri.EscapeDataString(searchName)}&type=series");
+    }
 
     private async Task DownloadImageAsync(string url, string filePath)
     {

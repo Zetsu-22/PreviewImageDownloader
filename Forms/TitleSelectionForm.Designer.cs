@@ -1,6 +1,6 @@
-namespace PreviewImageDownloader;
+namespace PreviewImageDownloader.Forms;
 
-partial class SettingsForm
+partial class TitleSelectionForm
 {
     /// <summary>
     ///  Required designer variable.
@@ -22,11 +22,7 @@ partial class SettingsForm
 
     #region Windows Form Designer generated code
 
-    /// <summary>
-    ///  Required method for Designer support - do not modify
-    ///  the contents of this method with the code editor.
-    /// </summary>
-    // InitializeComponent переопределен в SettingsForm.cs для программного создания UI
+    // InitializeComponent переопределен в TitleSelectionForm.cs для программного создания UI
 
     #endregion
 }
